@@ -1,0 +1,54 @@
+#!/usr/bin/env groovy
+
+timestamps {
+  node("LINUXCO7") {
+    properties([disableConcurrentBuilds()])
+
+    channel = "realsuite-web"
+    appName = "realsuite-web"
+
+    stage('clean') {
+      cleanWs()
+    }
+
+    stageWithFailureAlert("checkout", channel) {
+      checkout scm
+    }
+
+
+    movePipelineECS(
+      ecsCluster: appName,
+      appName: appName,
+      mainContainerName: appName,
+      mainContainerPort: "8080",
+      nodeEnv: "dev",
+      deployConfigDir: "deployment",
+      cloudformationDir: "cloudformation",
+      slackChannel: channel,
+      buildDockerImage: "@prosoft/${appName}",
+      testDockerImage: { Map args, buildinfo ->
+        stageWithFailureAlert("Test Docker Image", args.slackChannel) {
+          sh("mkdir -p -m 0777 ${env.WORKSPACE}/coverage")
+          args.containerRegistry.run.call("-v ${env.WORKSPACE}/coverage:/app/coverage", args.buildinfo,
+                                          "npm test")
+          publishHTML([allowMissing: false,
+                       alwaysLinkToLastBuild: false,
+                       keepAll: false,
+                       reportDir: "coverage",
+                       reportFiles: "*",
+                       reportName: "CodeCoverage",
+                       reportTitles: ""])
+        }
+      },
+      blackduckEnabled: false,
+      checkmarxEnabled: false,
+      blueGreenTest: { Map args, inactiveAlbHostname ->
+        sh "jenkins-hooks/integration-tests.sh ${inactiveAlbHostname}"
+      },
+      prEnvFileName: "${appName}-dev-pr",
+      devBranch: "master",
+      devAccount: accounts.get().TPHUB_DEV_US_WEST_2_PRIVATE,
+      prAccount: accounts.get().TPHUB_DEV_US_WEST_2_PRIVATE,
+      awsDeployToolsTag: "latest")
+  }
+}
